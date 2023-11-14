@@ -1,7 +1,7 @@
 import orjson
 import logging
 
-from fastapi import APIRouter, HTTPException, Depends, status, Query
+from fastapi import APIRouter, Body, HTTPException, Depends, status, Query
 from fastapi.encoders import jsonable_encoder
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -124,8 +124,15 @@ async def get_contact(
     This endpoint also uses Redis cache to store and retrieve contact data, \
     which improves the performance and reduces the database load. 
     """
+    
+    contact = await crud_contacts.get_contact(contact_id, current_user, db)
+    if contact is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found"
+        )
+    
     async with get_redis() as redis:
-        cache_key = f"contact_id: {contact_id}"
+        cache_key = f"contact_id:{contact_id}"
         cache_data = await redis.get(cache_key)
         if cache_data is not None:
             contact_data = orjson.loads(cache_data)
@@ -135,23 +142,17 @@ async def get_contact(
             )
 
             return contact_data
-
-        contact = await crud_contacts.get_contact(contact_id, current_user, db)
-        if contact is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found"
-            )
-
-        contact_dict = jsonable_encoder(contact, sqlalchemy_safe=True)
+        
+        contact_dict = jsonable_encoder(contact)
         serialize_contact = orjson.dumps(contact_dict)
-
+        await redis.set(cache_key, serialize_contact)
+        await redis.expire(cache_key, 3600)
+        
         logger.info(
             f"\nContact data for contact_id: {contact_id} retrieved from database and set in Redis cache.\n"
         )
-
-        await redis.set(cache_key, serialize_contact)
-        await redis.expire(cache_key, 3600)
-        return contact
+        
+    return contact
 
 
 @router.put(
@@ -161,7 +162,7 @@ async def get_contact(
 )
 async def update_contact(
     contact_id: int,
-    body: ContactSearchUpdateModel = Depends(),
+    body: ContactSearchUpdateModel = Body(...),
     current_user: User = Depends(auth_service.get_current_user),
     db: AsyncSession = Depends(get_session),
     # redis=Depends(get_redis),
@@ -176,12 +177,13 @@ async def update_contact(
     and the detail will be "Contact not found". \
     This endpoint also updates the Redis cache with the new contact data.
     """
+    
+    contact = await crud_contacts.update_contact(contact_id, body, current_user, db)
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    
     async with get_redis() as redis:
-        contact = await crud_contacts.update_contact(contact_id, body, current_user, db)
-        if contact is None:
-            raise HTTPException(status_code=404, detail="Contact not found")
-
-        cache_key = f"contact_id: {contact_id}"
+        cache_key = f"contact_id:{contact_id}"
         contact_dict = jsonable_encoder(contact)
         serialize_data = orjson.dumps(contact_dict)
         await redis.set(cache_key, serialize_data)
@@ -191,7 +193,7 @@ async def update_contact(
             f"\nContact data for contact_id: {contact_id} updated in database and Redis cache.\n"
         )
 
-        return contact
+    return contact
 
 
 @router.delete(
@@ -209,8 +211,15 @@ async def remove_contact(
     The response will not have any content and the status code will be 204. \
     If the contact is not found, the status code will be 404 and the detail will be "Contact not found".
     """
+    
+    contact = await crud_contacts.delete_contact(contact_id, current_user, db)
+    if contact is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found"
+        )
+    
     async with get_redis() as redis:
-        cache_key = f"contact_id: {contact_id}"
+        cache_key = f"contact_id:{contact_id}"
         cache_data = await redis.get(cache_key)
         if cache_data is not None:
             logger.info(
@@ -219,12 +228,5 @@ async def remove_contact(
 
             await redis.delete(cache_key)
 
-        contact = await crud_contacts.delete_contact(contact_id, current_user, db)
-        if contact is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found"
-            )
-
-        logger.info(f"\nContact {contact_id} deleted from Database.\n")
-
-        return contact
+    logger.info(f"\nContact {contact_id} deleted from Database.\n")
+    return contact

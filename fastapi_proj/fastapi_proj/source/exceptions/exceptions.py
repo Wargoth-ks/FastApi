@@ -1,4 +1,4 @@
-from sqlalchemy.exc import IntegrityError, ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, NoResultFound
 from pydantic import ValidationError
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError, ResponseValidationError
@@ -42,6 +42,15 @@ def register_exception_handlers(fast_app: FastAPI):
             ),
         )
 
+    @fast_app.exception_handler(NoResultFound)
+    async def no_result_exception_handler(request: Request, exc: NoResultFound):
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content=jsonable_encoder(
+                {"Detail": "User not found."}
+            ),
+        )
+    
     @fast_app.exception_handler(ResponseValidationError)
     async def validation_exception_handler_401(
         request: Request, exc: ResponseValidationError

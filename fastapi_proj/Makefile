@@ -16,6 +16,7 @@ stop:
 clean:
 	docker system prune
 
+# Logging containers
 logs:
 	docker-compose logs --follow
 

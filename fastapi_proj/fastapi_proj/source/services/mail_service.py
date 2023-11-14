@@ -11,7 +11,7 @@ from configs import settings
 
 logger = logging.getLogger("uvicorn")
 
-# Use gmail service!!!
+
 email_config = ConnectionConfig(
     MAIL_USERNAME=settings.MAIL_USERNAME,
     MAIL_PASSWORD=settings.MAIL_PASSWORD,
@@ -26,45 +26,40 @@ email_config = ConnectionConfig(
 )
 
 
-async def send_email_confirm(email: EmailStr, username: str, host: str):
-    try:
-        token_verification = auth_service.create_email_token(
-            {"sub": email}, "confirm_email"
-        )
-        message = MessageSchema(
-            subject="Confirm your email",
-            recipients=[email],
-            template_body={
-                "host": host,
-                "username": username,
-                "token": token_verification,
-            },
-            subtype=MessageType.html,
-        )
+class EmailService:
 
-        fm = FastMail(email_config)
+    def __init__(self, email_config):
+        self.email_config = email_config
+        self.fm = FastMail(email_config)
 
-        await fm.send_message(message, template_name="email_template.html")
-    except ConnectionErrors as e:
-        logger.error(f"Something went wrong in registration email notification")
-        logger.error(str(e))
+    async def send_email(
+        self, 
+        email: EmailStr, 
+        username: str, 
+        host: str, 
+        token_purpose: str, 
+        subject: str, 
+        template: str
+        ):
+        try:
+            token = auth_service.create_email_token(
+                {"sub": email}, token_purpose
+            )
+            message = MessageSchema(
+                subject=subject,
+                recipients=[email],
+                template_body={
+                    "host": host,
+                    "username": username,
+                    "token": token,
+                },
+                subtype=MessageType.html,
+            )
 
+            await self.fm.send_message(message, template_name=template)
+        except ConnectionErrors as e:
+            logger.error(f"Something went wrong in {subject} email notification")
+            logger.error(str(e))
 
-async def send_email_reset(email: EmailStr, username: str, host: str):
-    try:
-        token_resetting = auth_service.create_email_token(
-            {"sub": email}, "reset_password"
-        )
-        message = MessageSchema(
-            subject="Reset your password",
-            recipients=[email],
-            template_body={"host": host, "username": username, "token": token_resetting},
-            subtype=MessageType.html,
-        )
-
-        fm = FastMail(email_config)
-
-        await fm.send_message(message, template_name="reset_password.html")
-    except ConnectionErrors as e:
-        logger.error(f"Something went wrong in reset password email")
-        logger.error(str(e))
+            
+email_service = EmailService(email_config)

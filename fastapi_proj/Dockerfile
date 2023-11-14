@@ -33,6 +33,7 @@ WORKDIR /home/$USERNAME/app
 COPY pyproject.toml poetry.lock ./
 
 # Install packages
+# [OPTIONAL] Validate the project is properly configured
 RUN poetry install --no-interaction \
                     --no-cache \
                     --no-root

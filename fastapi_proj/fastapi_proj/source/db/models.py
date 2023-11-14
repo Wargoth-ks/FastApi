@@ -21,7 +21,9 @@ class User(Base):
         "updated_at", DateTime, default=func.now(), onupdate=func.now()
     )
     confirmed: Mapped[Boolean] = mapped_column(Boolean, default=False)
-    contacts: Mapped[list["Contact"]] = relationship("Contact", back_populates="user")
+    contact: Mapped[list["Contact"]] = relationship(
+        "Contact", back_populates="user", cascade="all,delete", passive_deletes=True,
+        )
 
 
 class Contact(Base):
@@ -38,5 +40,5 @@ class Contact(Base):
     updated_at: Mapped[DateTime] = mapped_column(
         "updated_at", DateTime, default=func.now(), onupdate=func.now()
     )
-    user_id: Mapped[int] = mapped_column("user_id", Integer, ForeignKey("users.id"))
-    user: Mapped["User"] = relationship("User", back_populates="contacts")
+    user_id: Mapped[int] = mapped_column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"))
+    user: Mapped["User"] = relationship("User", back_populates="contact")

@@ -55,10 +55,10 @@ making it easy for users to manage their contacts and user accounts.
 """
 
 fast_app = FastAPI(
-    debug=True,
+    # debug=True,
     swagger_ui_parameters={"persistAuthorization": True},
     default_response_class=ORJSONResponse,
-    title="FastApi application. Version: 2.5.1",
+    title="FastApi application. Version: 2.6.1",
     description=description,
     contact={
         "name": "Wargoth",
@@ -97,14 +97,14 @@ exceptions.register_exception_handlers(fast_app)
 #     )
 
 
-origins = [ 
-    "http://localhost:3000"
-    ]
+# origins = [ 
+#     "http://localhost:3000"
+#     ]
 
 fast_app.add_middleware(
     CORSMiddleware, 
     allow_credentials=True,
-    allow_origins=origins, 
+    allow_origins=["*"], 
     allow_methods=["*"], 
     allow_headers=["*"]
 )
@@ -121,7 +121,7 @@ async def rate_limit_middleware(request: Request, call_next):
 
             if count is None:
                 await redis.setex(key, 60, 1)  # ip, seconds, number of requests
-            elif int(count) > 10:  # Set your desired rate limit here
+            elif int(count) > 50:  # Set your desired rate limit here
                 raise HTTPException(status_code=429, detail="Too many requests")
             else:
                 await redis.incr(key)

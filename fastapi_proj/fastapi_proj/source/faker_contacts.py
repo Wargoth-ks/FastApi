@@ -12,6 +12,10 @@ from db.models import Contact
 from db.connect_db import SessionLocal
 from sqlalchemy import select, or_
 from prompt_toolkit import PromptSession
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 
 session = PromptSession()

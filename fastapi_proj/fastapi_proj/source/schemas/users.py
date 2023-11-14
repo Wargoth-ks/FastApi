@@ -44,7 +44,7 @@ class UserDBModel(BaseModel):
 
 class UserResponseModel(BaseModel):
     user: UserDBModel
-    detail: str = "User successfully created"
+    detail: str = "User successfully created. Please, check your emailbox for confirm registration"
 
 
 class OAuth2Login(OAuth2PasswordRequestForm):
@@ -81,5 +81,5 @@ class TokenModel(BaseModel):
 
 
 class RequestEmail(BaseModel):
-    email: str
+    email: EmailStr
 

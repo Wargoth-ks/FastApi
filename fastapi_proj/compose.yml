@@ -9,7 +9,7 @@ services:
     image: fastapi_app
     restart: always
     command: | 
-      /bin/bash -c "sleep 15 && poetry run alembic upgrade head && 
+      /bin/bash -c "sleep 5 && poetry run alembic upgrade head && 
         poetry run python fastapi_proj/main.py"
     environment:
       - DOCKER_ENV=true

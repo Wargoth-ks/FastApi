@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fastapi-proj"
-version = "2.5.1"
+version = "2.6.1"
 description = ""
 authors = ["Wargoth_ks <121107554+Wargoth-ks@users.noreply.github.com>"]
 readme = "README.md"

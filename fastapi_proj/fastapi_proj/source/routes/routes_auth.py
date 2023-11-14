@@ -17,6 +17,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from source.db.models import User
 
 from source.crud import crud_users
 
@@ -33,14 +34,13 @@ from source.schemas.users import (
 )
 
 from source.services.auth import auth_service
-from source.services.cloudinary_service import Cloudinary
-from source.services.mail_service import send_email_confirm, send_email_reset
+from source.services.cloudinary_service import cloud
+from source.services.mail_service import email_service
 from source.services.redis_service import get_redis
 
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 security = HTTPBearer()
-cloudinary_service = Cloudinary()
 
 
 # Register user and sending email for confirmation
@@ -69,14 +69,21 @@ async def signup(
     """
     
     upload_file = avatar.file    
-    body.avatar = cloudinary_service.upload_image(upload_file, body.username)
-    
+    url = cloud.upload_image(upload_file, body.username)
+    body.avatar = f"{url}" + "/" + f"{avatar.filename}"
     body.password = auth_service.get_password_hash(body.password)
-    
+
     new_user = await crud_users.create_user(body, db)
+    
     background_tasks.add_task(
-        send_email_confirm, new_user.email, new_user.username, str(request.base_url)
-    )
+        email_service.send_email, 
+        new_user.email, 
+        new_user.username,
+        str(request.base_url),
+        "confirm_email",
+        "Confirm your email",
+        "email_template.html"
+        )
     
     return {
         "user": new_user,
@@ -103,20 +110,23 @@ async def login(body: OAuth2Login = Depends(), db: AsyncSession = Depends(get_se
     
     user = await crud_users.get_user_by_email(body.username, db)
     if user:
-        if user.confirmed:
-            if auth_service.verify_password(body.password, user.password):
-                access_token = await auth_service.create_access_token(
-                    data={"sub": user.email}
+        if not user.confirmed:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Please, confirm your email!"
                 )
-                refresh_token = await auth_service.create_refresh_token(
-                    data={"sub": user.email}
-                )
-                await crud_users.update_token(user, refresh_token, db)
-                return {
-                    "access_token": access_token,
-                    "refresh_token": refresh_token,
-                    "token_type": "bearer",
-                }
+        if auth_service.verify_password(body.password, user.password):
+            access_token = auth_service.create_access_token(
+                data={"sub": user.email}
+            )
+            refresh_token = auth_service.create_refresh_token(
+                data={"sub": user.email}
+            )
+            await crud_users.update_token(user, refresh_token, db)
+            return {
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "token_type": "bearer",
+            }
 
 
 # Confirm user email after registration
@@ -131,13 +141,16 @@ async def confirmed_email(token: str, db: AsyncSession = Depends(get_session)):
     If the email is successfully verified, a confirmation message is returned in a JSON response.
     """
     
-    email = await auth_service.decode_token(token)
+    email = auth_service.decode_token(token)
     user = await crud_users.get_user_by_email(email, db)
-    if user:
-        if user.confirmed:
-            return {"message": "Your email is alredy confirmed"}
-        await crud_users.confirmed_email(email, db)
-        return {"message": "Email confirmed"}
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
+    if user.confirmed:
+        return {"message": "Your email is alredy confirmed"}
+    await crud_users.confirmed_email(email, db)
+    return {"message": "Email confirmed"}
 
 
 # Update user access and refresh token with refresh token
@@ -163,7 +176,7 @@ async def refresh_token(
     """
     
     token = credentials.credentials
-    email = await auth_service.decode_token(token)
+    email = auth_service.decode_token(token)
     user = await crud_users.get_user_by_email(email, db)
     if user.refresh_token != token:
         await crud_users.update_token(user, None, db)
@@ -171,8 +184,8 @@ async def refresh_token(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token"
         )
 
-    access_token = await auth_service.create_access_token(data={"sub": email})
-    refresh_token = await auth_service.create_refresh_token(data={"sub": email})
+    access_token = auth_service.create_access_token(data={"sub": email})
+    refresh_token = auth_service.create_refresh_token(data={"sub": email})
     await crud_users.update_token(user, refresh_token, db)
     return {
         "access_token": access_token,
@@ -184,7 +197,7 @@ async def refresh_token(
 # Logout user with refresh token
 @router.get("/logout", summary="Log out a user by revoking their refresh token")
 async def logout(
-    credentials: HTTPAuthorizationCredentials = Security(security),
+    user: User = Depends(auth_service.get_current_user),
     db: AsyncSession = Depends(get_session),
 ):
     
@@ -198,23 +211,14 @@ async def logout(
     It returns a success message in a JSON response.
     """
     
-    token = credentials.credentials
-    email = await auth_service.decode_token(token)
-    user = await crud_users.get_user_by_email(email, db)
-    if user.refresh_token != token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token"
-        )
     await crud_users.update_token(user, None, db)
     async with get_redis() as redis:
-        key = f"user:{email}"
-        print(key)
+        key = f"user:{user.email}"
         cache_data = await redis.get(key)
-        print(cache_data)
         if cache_data is not None:
             await redis.delete(key)
             print(f"Redis: User cache data for {key} was deleted")
-        return "You have logged out successfully"
+    return "You have logged out successfully"
 
 
 # Repeat send email for confirmation if user didn't received it
@@ -239,10 +243,18 @@ async def request_email(
     user = await crud_users.get_user_by_email(body.email, db)
     if user.confirmed:
         return {"message": "Your email is already confirmed"}
+    
     if user:
         background_tasks.add_task(
-            send_email_confirm, user.email, user.username, str(request.base_url)
+        email_service.send_email, 
+        user.email, 
+        user.username,
+        str(request.base_url),
+        "confirm_email",
+        "Confirm your email",
+        "email_template.html"
         )
+        
     return {"message": "Check your email for confirmation."}
 
 
@@ -267,16 +279,22 @@ async def reset_password(
     user = await crud_users.get_user_by_email(body.email, db)
     if user:
         background_tasks.add_task(
-            send_email_reset, user.email, user.username, str(request.base_url)
+        email_service.send_email, 
+        user.email, 
+        user.username,
+        str(request.base_url),
+        "reset_password",
+        "Reset your password",
+        "reset_password.html"
         )
-        print(user.email, user.username, str(request.base_url))
+        
     return {
         "message": "Check your email for reset password. You have 15 minutes for reset!"
     }
 
 
 # Get reset token for changing password
-@router.get("/get_reset_token/{token}",  summary="Get token for reset password")
+@router.get("/get_reset_token/{token}", summary="Get token for reset password")
 async def get_reset_token(token: str, request: Request, db: AsyncSession = Depends(get_session)):
     
     """
@@ -290,18 +308,17 @@ async def get_reset_token(token: str, request: Request, db: AsyncSession = Depen
     
     from main import templates
     
-    email = await auth_service.decode_token(token)
+    email = auth_service.decode_token(token)
     user = await crud_users.get_user_by_email(email, db)
 
     async with get_redis() as redis:
-        reset_token = f"reset_token: {token}"
+        reset_token = f"reset_token_{user.email}:{token}"
         token_data = await redis.get(reset_token)
         if user:
             if token_data is None:
-                user_dict = jsonable_encoder(user)
-                serialize_user = orjson.dumps(user_dict)
+                serialize_user = orjson.dumps(token)
                 await redis.set(reset_token, serialize_user)
-                await redis.expire(reset_token, 300)
+                await redis.expire(reset_token, 900)
             # return {"Reset token": token}
             return templates.TemplateResponse("reset_token.html", {"request": request, "token": token})
 
@@ -325,16 +342,17 @@ async def confirm_reset_password(
     token = secret.reset_token.get_secret_value()
     password = secret.new_password.get_secret_value()
 
-    email = await auth_service.decode_token(token)
+    email = auth_service.decode_token(token)
     user = await crud_users.get_user_by_email(email, db)
 
     async with get_redis() as redis:
-        reset_token = f"reset_token: {token}"
+        reset_token = f"reset_token_{user.email}:{token}"
         token_data = await redis.get(reset_token)
         if token_data is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Invalid token for email verification",
+                detail="Your password reset token has expired. "
+                "Please request a new token to reset your password."
             )
         if user:
             if user.confirmed:
